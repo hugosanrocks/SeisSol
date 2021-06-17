@@ -11,7 +11,40 @@
 #include "Geometry/MeshReader.h"
 #include <Physics/InitialField.h>
 
-void seissol::writer::AnalysisWriter::printAnalysis(double simulationTime) {
+namespace seissol::writer {
+
+CsvAnalysisWriter::CsvAnalysisWriter() :
+    out(), isActive(false) { }
+
+void CsvAnalysisWriter::writeHeader() {
+  if (isActive) {
+    out << "variable,norm,error\n";
+  }
+}
+
+void CsvAnalysisWriter::addObservation(std::string_view variable,
+                                       std::string_view normType,
+                                       real error) {
+  if (isActive) {
+    out << variable << "," << normType << "," << error << "\n";
+  }
+}
+
+void CsvAnalysisWriter::activate() {
+  isActive = true;
+  out.open("analysis.csv");
+}
+
+CsvAnalysisWriter::~CsvAnalysisWriter() {
+  if (isActive) {
+    out.close();
+    if (!out) {
+      logError() << "Error when writing analysis output to file";
+    }
+  }
+}
+
+void AnalysisWriter::printAnalysis(double simulationTime) {
   const auto& mpi = seissol::MPI::mpi;
 
   const auto initialConditionType = std::string(e_interoperability.getInitialConditionType());
@@ -79,7 +112,7 @@ void seissol::writer::AnalysisWriter::printAnalysis(double simulationTime) {
     alignas(ALIGNMENT) real numericalSolutionData[tensor::dofsQP::size()];
     alignas(ALIGNMENT) real analyticalSolutionData[numQuadPoints*numberOfQuantities];
 #ifdef _OPENMP
-#pragma omp parallel for firstprivate(quadraturePointsXyz) private(numericalSolutionData, analyticalSolutionData)
+#pragma omp parallel for default(none) shared(elements, vertices, iniFields, quadraturePoints, globalData, errsLInfLocal, simulationTime, ltsLut, lts, sim, quadratureWeights, elemsLInfLocal, errsL2Local, errsL1Local) firstprivate(quadraturePointsXyz) private(numericalSolutionData, analyticalSolutionData)
 #endif
     for (std::size_t meshId = 0; meshId < elements.size(); ++meshId) {
 #ifdef _OPENMP
@@ -158,8 +191,6 @@ void seissol::writer::AnalysisWriter::printAnalysis(double simulationTime) {
 
     }
 
-    // TODO(Lukas) Print hs, fortran: MESH%MaxSQRTVolume, MESH%MaxCircle
-
 #ifdef USE_MPI
     const auto& comm = mpi.comm();
 
@@ -182,6 +213,13 @@ void seissol::writer::AnalysisWriter::printAnalysis(double simulationTime) {
       MPI_MAXLOC,
       comm);
 
+    auto csvWriter = CsvAnalysisWriter();
+    if (mpi.rank() == 0) {
+      csvWriter.activate();
+      csvWriter.writeHeader();
+    }
+
+
     for (unsigned int i = 0; i < numberOfQuantities; ++i) {
       VrtxCoords centerSend;
       MeshTools::center(elements[elemLInfLocal[i]],
@@ -200,12 +238,17 @@ void seissol::writer::AnalysisWriter::printAnalysis(double simulationTime) {
         } else {
           MPI_Recv(centerRecv, 3, MPI_DOUBLE,  errLInfRecv[i].rank, i, comm, MPI_STATUS_IGNORE);
         }
-        logInfo(mpi.rank()) << "L1  , var[" << i << "] =\t" << errL1MPI[i];
-        logInfo(mpi.rank()) << "L2  , var[" << i << "] =\t" << std::sqrt(errL2MPI[i]);
-        logInfo(mpi.rank()) << "LInf, var[" << i << "] =\t" << errLInfRecv[i].val
+        const auto errL1 = errL1MPI[i];
+        const auto errL2 = std::sqrt(errL2MPI[i]);
+        const auto errLInf = errLInfRecv[i].val;
+        logInfo(mpi.rank()) << "L1  , var[" << i << "] =\t" << errL1;
+        logInfo(mpi.rank()) << "L2  , var[" << i << "] =\t" << errL2;
+        logInfo(mpi.rank()) << "LInf, var[" << i << "] =\t" << errLInf
             << "at rank " << errLInfRecv[i].rank
             << "\tat [" << centerRecv[0] << ",\t" << centerRecv[1] << ",\t" << centerRecv[2] << "\t]";
-
+        csvWriter.addObservation(std::to_string(i), "L1", errL1);
+        csvWriter.addObservation(std::to_string(i), "L2", errL2);
+        csvWriter.addObservation(std::to_string(i), "LInf", errLInf);
       }
     }
 #else
@@ -223,4 +266,5 @@ void seissol::writer::AnalysisWriter::printAnalysis(double simulationTime) {
 #endif // USE_MPI
   }
 }
+} // namespace seissol::writer
 
