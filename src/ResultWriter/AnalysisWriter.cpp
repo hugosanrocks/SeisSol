@@ -13,11 +13,11 @@
 
 namespace seissol::writer {
 
-CsvAnalysisWriter::CsvAnalysisWriter() :
-    out(), isActive(false) { }
+CsvAnalysisWriter::CsvAnalysisWriter(std::string fileName) :
+    out(), isEnabled(false), fileName(std::move(fileName)) { }
 
 void CsvAnalysisWriter::writeHeader() {
-  if (isActive) {
+  if (isEnabled) {
     out << "variable,norm,error\n";
   }
 }
@@ -25,18 +25,18 @@ void CsvAnalysisWriter::writeHeader() {
 void CsvAnalysisWriter::addObservation(std::string_view variable,
                                        std::string_view normType,
                                        real error) {
-  if (isActive) {
+  if (isEnabled) {
     out << variable << "," << normType << "," << error << "\n";
   }
 }
 
-void CsvAnalysisWriter::activate() {
-  isActive = true;
-  out.open("analysis.csv");
+void CsvAnalysisWriter::enable() {
+  isEnabled = true;
+  out.open(fileName);
 }
 
 CsvAnalysisWriter::~CsvAnalysisWriter() {
-  if (isActive) {
+  if (isEnabled) {
     out.close();
     if (!out) {
       logError() << "Error when writing analysis output to file";
@@ -213,9 +213,9 @@ void AnalysisWriter::printAnalysis(double simulationTime) {
       MPI_MAXLOC,
       comm);
 
-    auto csvWriter = CsvAnalysisWriter();
+    auto csvWriter = CsvAnalysisWriter(fileName);
     if (mpi.rank() == 0) {
-      csvWriter.activate();
+      csvWriter.enable();
       csvWriter.writeHeader();
     }
 
